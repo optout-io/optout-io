@@ -69,6 +69,9 @@ graph TD
     CJ -.->|All Events| ELS
     ELS --> ELDB
 
+    DES -.->|Workflow/Activity Events - NATS core| CN
+    CN -.->|Live Events SSE| AA
+
     AU -->|Query status| DES
     AA -->|Query workflows| DES
     AA -->|Query event timeline| ELS
@@ -103,9 +106,10 @@ graph TD
 **Role:** Internal admin dashboard. Real-time observability over workflows.
 
 - SSE-based real-time event streaming (Datastar hypermedia framework)
+- Subscribes to NATS core (`com.optmeout.dataerasure.workflow.progress`) for live workflow events; broadcasts to browser via SSE `PatchSignals`
 - Workflow timeline drawer: shows per-workflow activity status, deep links to Temporal UI
-- Calls `lake` gRPC API to retrieve event history
-- Stack: Go, Chi, Templ, Datastar, gRPC, OpenTelemetry
+- Calls `data-erasure-wf` gRPC API for workflow list/detail; calls `lake` gRPC API for event history
+- Stack: Go, Chi, Templ, Datastar, gRPC, NATS core, OpenTelemetry
 
 ### webform-playwright
 **Repo:** `webform-playwright/`  
