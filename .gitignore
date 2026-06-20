@@ -1,0 +1,7 @@
+# Component repos live alongside this repo but are separate git repositories
+abscond/
+contracts/
+data-erasure-wf/
+go-common/
+lake/
+webform-playwright/
