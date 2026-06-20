@@ -106,10 +106,11 @@ graph TD
 **Role:** Internal admin dashboard. Real-time observability over workflows.
 
 - SSE-based real-time event streaming (Datastar hypermedia framework)
-- Subscribes to NATS core (`com.optmeout.dataerasure.workflow.progress`) for live workflow events; broadcasts to browser via SSE `PatchSignals`
-- Workflow timeline drawer: shows per-workflow activity status, deep links to Temporal UI
-- Calls `data-erasure-wf` gRPC API for workflow list/detail; calls `lake` gRPC API for event history
-- Stack: Go, Chi, Templ, Datastar, gRPC, NATS core, OpenTelemetry
+- Subscribes to NATS core (`com.optmeout.dataerasure.workflow.progress`) for live workflow events; broadcasts via SSE `PatchSignals` which triggers Datastar effects to refetch the workflow table and drawer
+- Activity timeline entries pushed directly from the SSE write path into `#timeline-items` (prepend) — no polling, no lake round-trip for live updates
+- Workflow drawer: per-workflow activity status timeline, Temporal deep link, workflow control actions (cancel/terminate/signal)
+- Calls `data-erasure-wf` gRPC for workflow list/detail; calls `lake` gRPC for historical event timeline
+- Stack: Go, Chi, Templ, Datastar v1.0.0-RC.6, DaisyUI v5 + Tailwind CSS v4 (standalone build, no Node.js), gRPC, NATS core, OpenTelemetry
 
 ### webform-playwright
 **Repo:** `webform-playwright/`  
@@ -131,13 +132,11 @@ graph TD
 
 ### go-common
 **Repo:** `go-common/`  
-**Role:** Shared Go infrastructure library.
+**Role:** Shared Go infrastructure library. Domain-agnostic — no business logic, no domain imports.
 
-- Logging setup (structured, OpenTelemetry-aware)
-- OTel initialization
-- URN parsing/extraction utilities
-- Workflow logger abstraction
-- Domain-agnostic by design — no business logic, no circular deps
+- `pkg/logger` — structured Zap logging; `WithContext(ctx, log)` injects OTel trace/span IDs
+- `pkg/otel` — `NewOtelProvider(serviceName string)` initialises trace + metrics providers. Trace export gated on `OTEL_EXPORTER_OTLP_ENDPOINT`; metrics export gated separately on `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`
+- `pkg/workflowlogger` — Temporal-aware logger adapter
 
 ### Onboarding Service
 **Repo:** not yet in this workspace (separate service)  
@@ -157,10 +156,13 @@ All async communication is via JetStream. Events are durable, ordered per-subjec
 All multi-step, stateful processes run as Temporal workflows. Temporal provides retry logic, timeouts, visibility, and replay-safe execution. Workers are separate binaries from services.
 
 ### Observability
-- Structured logging via `go-common`
-- OpenTelemetry traces exported from all Go services
-- Event timeline via `lake` + `abscond`
-- Temporal UI for workflow-level debugging
+- Structured logging via `go-common/pkg/logger`. `logger.WithContext(ctx, log)` injects `trace_id`/`span_id` from the active OTel span.
+- **Distributed tracing** — OpenTelemetry SDK in all Go services. Traces exported to Jaeger (local: `http://localhost:16686`) via `OTEL_EXPORTER_OTLP_ENDPOINT`. Metrics intentionally separate — only exported when `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` is also set (Jaeger is traces-only).
+- **gRPC** — `otelgrpc.NewClientHandler()` on all gRPC clients; `otelgrpc.NewServerHandler()` on all gRPC servers. Trace context propagates across the HTTP → gRPC boundary automatically.
+- **Temporal** — `opentelemetry.NewTracingInterceptor()` registered on the data-erasure-wf worker. Auto-spans for every workflow and activity execution.
+- **NATS** — W3C trace context injected into JetStream message headers on publish (`PublishDataErasureInitiated`); extracted by the lake event ingestor to continue the trace across the async boundary. NATS server itself does not export OTel spans.
+- **Event timeline** — lake stores all workflow/activity events; abscond queries them via gRPC for the per-workflow drawer timeline.
+- **Temporal UI** — deep links from abscond drawer to Temporal UI for workflow-level debugging (search by workflow ID).
 
 ### Schema Evolution
 All inter-service contracts live in `contracts/`. Changes require backward-compatible protobuf evolution. Breaking changes require a new message version.
@@ -172,5 +174,5 @@ All inter-service contracts live in `contracts/`. Changes require backward-compa
 1. **Domain-owned storage**: each domain service owns its own projection DB. No cross-domain DB reads.
 2. **lake is append-only**: events are never updated or deleted. Deduplication is at ingestion.
 3. **Temporal workers are stateless**: all durable state lives in Temporal + the projection DB.
-4. **Broker automation is config-driven**: adding a new data broker requires a YAML config in `webform-playwright`, not code changes in the orchestration layer.
+4. **Broker automation is config-driven** *(aspiration)*: the webform layer is fully config-driven (YAML per broker in `webform-playwright`). The orchestration layer (`data-erasure-wf`) still requires a small Go child workflow file per broker — eliminating this is a roadmap item (see `ROADMAP.md`, initiative #1).
 5. **contracts defines the API surface**: services communicate via protobuf contracts, not shared Go structs.
